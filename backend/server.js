@@ -12,10 +12,7 @@ connectDB();
 
 const app = express();
 
-// Enhanced session management
-const activeUsers = new Map(); // Store active user sessions
-const userSockets = new Map(); // Map user IDs to their socket connections
-
+// CORS middleware should be one of the first middleware
 app.use(
   cors({
     origin: "http://localhost:5173",
@@ -25,11 +22,29 @@ app.use(
   })
 );
 
+// Body parser middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Serve uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// Enhanced session management
+const activeUsers = new Map(); // Store active user sessions
+const userSockets = new Map(); // Map user IDs to their socket connections
+const userSessions = new Map(); // Store user sessions
+
+// Import routes
+const userRoutes = require("./routes/userRoutes");
+const postRoutes = require("./routes/postRoutes");
+const profileRoutes = require("./routes/profileRoutes");
+const messageRoutes = require("./routes/messageRoutes");
+
+// Routes - after CORS and body parser middleware
+app.use("/api/users", userRoutes);
+app.use("/api/posts", postRoutes);
+app.use("/api/profiles", profileRoutes);
+app.use("/api/messages", messageRoutes);
 
 const server = http.createServer(app);
 
@@ -42,7 +57,6 @@ const io = new Server(server, {
   },
 });
 
-// Enhanced Socket.IO middleware for authentication
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth.token;
@@ -53,17 +67,12 @@ io.use(async (socket, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     socket.userId = decoded.id;
 
-    // Store user's socket connection
-    if (!userSockets.has(decoded.id)) {
-      userSockets.set(decoded.id, new Set());
-    }
-    userSockets.get(decoded.id).add(socket.id);
-
-    // Track active user
-    activeUsers.set(decoded.id, {
+    // Store socket connection with unique identifier
+    const sessionId = `${decoded.id}-${socket.id}`;
+    userSessions.set(sessionId, {
       userId: decoded.id,
       socketId: socket.id,
-      lastActive: Date.now(),
+      timestamp: Date.now(),
     });
 
     next();
@@ -72,43 +81,17 @@ io.use(async (socket, next) => {
   }
 });
 
-// Import routes
-const userRoutes = require("./routes/userRoutes");
-const postRoutes = require("./routes/postRoutes");
-const profileRoutes = require("./routes/profileRoutes");
-const messageRoutes = require("./routes/messageRoutes");
-
-app.use("/api/users", userRoutes);
-app.use("/api/posts", postRoutes);
-app.use("/api/profiles", profileRoutes);
-app.use("/api/messages", messageRoutes);
-
-// Enhanced Socket connection handling
 io.on("connection", (socket) => {
   console.log("User connected:", socket.userId);
 
-  // Join user to their personal room
-  socket.join(socket.userId);
+  // Join user to their personal room using unique socket ID
+  const userRoom = `user-${socket.userId}-${socket.id}`;
+  socket.join(userRoom);
 
-  // Notify others about user's online status
-  io.emit("userStatus", {
-    userId: socket.userId,
-    status: "online",
-  });
-
-  socket.on("join", (userId) => {
-    if (socket.userId) {
-      // Verify authenticated user
-      socket.join(userId);
-      console.log(`User ${socket.userId} joined room: ${userId}`);
-    }
-  });
-
-  // Enhanced message handling with proper room management
   socket.on("sendMessage", async (data) => {
     try {
       const { receiver, content } = data;
-      const sender = socket.userId; // Use authenticated user ID
+      const sender = socket.userId;
 
       const Message = require("./models/messageModel");
       const newMessage = await Message.create({
@@ -122,58 +105,26 @@ io.on("connection", (socket) => {
         .populate("sender", "name email")
         .populate("receiver", "name email");
 
-      // Send to specific rooms only
-      socket.to(receiver).emit("newMessage", populatedMessage);
-      socket.emit("newMessage", populatedMessage); // Send to sender
+      // Send to all socket instances of the receiver
+      Array.from(io.sockets.sockets.values())
+        .filter((s) => s.userId === receiver)
+        .forEach((s) => s.emit("newMessage", populatedMessage));
 
-      // Store message in database
-      await newMessage.save();
+      // Send back to sender's specific socket
+      socket.emit("newMessage", populatedMessage);
     } catch (error) {
       console.error("Error sending message:", error);
       socket.emit("messageError", { error: "Failed to send message" });
     }
   });
 
-  // Enhanced typing indicator management
-  socket.on("typing", ({ receiverId }) => {
-    if (socket.userId) {
-      socket.to(receiverId).emit("userTyping", { userId: socket.userId });
-    }
-  });
-
-  socket.on("stopTyping", ({ receiverId }) => {
-    if (socket.userId) {
-      socket
-        .to(receiverId)
-        .emit("userStoppedTyping", { userId: socket.userId });
-    }
-  });
-
-  // Enhanced disconnect handling
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.userId);
-
-    if (socket.userId) {
-      // Remove socket from user's socket set
-      const userSocketSet = userSockets.get(socket.userId);
-      if (userSocketSet) {
-        userSocketSet.delete(socket.id);
-        if (userSocketSet.size === 0) {
-          userSockets.delete(socket.userId);
-          activeUsers.delete(socket.userId);
-
-          // Notify others about user's offline status
-          io.emit("userStatus", {
-            userId: socket.userId,
-            status: "offline",
-          });
-        }
-      }
-    }
+    const sessionId = `${socket.userId}-${socket.id}`;
+    userSessions.delete(sessionId);
   });
 });
 
-// Error handling middleware
+// Error handling middleware should be last
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ message: err.message || "Something went wrong!" });

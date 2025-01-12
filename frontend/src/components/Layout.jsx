@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { Menu, X, Home, Users, UserCircle, LogOut, Bell } from "lucide-react";
+import { Menu, X, Home, UserCircle, LogOut } from "lucide-react";
 
 const Layout = ({ children }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [notifications] = useState(3);
 
   const NavLink = ({ href, icon: Icon, label }) => (
     <a
@@ -37,18 +36,7 @@ const Layout = ({ children }) => {
             <div className="hidden md:flex md:items-center md:gap-6">
               <NavLink href="/posts" icon={Home} label="Home" />
               <NavLink href="/profile" icon={UserCircle} label="Profile" />
-              <NavLink href="/users" icon={Users} label="Users" />
               <NavLink href="/chat" icon={Home} label="Chat" />
-
-              {/* Notification Bell */}
-              <button className="relative p-2 text-gray-700 hover:bg-blue-50 rounded-lg transition-colors">
-                <Bell className="w-5 h-5" />
-                {notifications > 0 && (
-                  <span className="absolute top-0 right-0 w-4 h-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    {notifications}
-                  </span>
-                )}
-              </button>
 
               {/* Logout Button */}
               <a
@@ -82,7 +70,6 @@ const Layout = ({ children }) => {
             <div className="space-y-1 px-4">
               <NavLink href="/posts" icon={Home} label="Home" />
               <NavLink href="/profile" icon={UserCircle} label="Profile" />
-              <NavLink href="/users" icon={Users} label="Users" />
               <NavLink href="/logout" icon={LogOut} label="Logout" />
               <NavLink href="/chat" icon={Home} label="Chat" />
             </div>

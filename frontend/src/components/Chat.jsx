@@ -35,15 +35,15 @@ const Chat = ({ selectedUserId, currentUserId }) => {
         reconnection: true,
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
+        query: { userId: currentUserId },
       });
 
       socketRef.current = newSocket;
       setSocket(newSocket);
 
       newSocket.on("connect", () => {
-        console.log("Socket connected");
+        console.log("Socket connected with ID:", currentUserId);
         setIsConnected(true);
-        newSocket.emit("join", currentUserId);
       });
 
       newSocket.on("connect_error", (error) => {
@@ -55,6 +55,25 @@ const Chat = ({ selectedUserId, currentUserId }) => {
       newSocket.on("disconnect", () => {
         console.log("Socket disconnected");
         setIsConnected(false);
+      });
+
+      // Handle incoming messages
+      newSocket.on("newMessage", (message) => {
+        setMessages((prevMessages) => [...prevMessages, message]);
+        scrollToBottom();
+      });
+
+      // Handle typing indicators
+      newSocket.on("userTyping", ({ userId }) => {
+        if (userId === selectedUserId) {
+          setIsTyping(true);
+        }
+      });
+
+      newSocket.on("userStoppedTyping", ({ userId }) => {
+        if (userId === selectedUserId) {
+          setIsTyping(false);
+        }
       });
 
       // Handle user status updates
@@ -70,13 +89,14 @@ const Chat = ({ selectedUserId, currentUserId }) => {
 
     const socket = initSocket();
 
+    // Cleanup function
     return () => {
       if (socket) {
-        socket.close();
+        socket.disconnect();
         socketRef.current = null;
       }
     };
-  }, [currentUserId]);
+  }, [currentUserId, selectedUserId]);
 
   // Auto-reconnect logic
   useEffect(() => {
@@ -98,7 +118,30 @@ const Chat = ({ selectedUserId, currentUserId }) => {
     };
   }, [isConnected, currentUserId]);
 
-  // Fetch messages with pagination
+  // Fetch selected user information
+  useEffect(() => {
+    const fetchUserInfo = async () => {
+      if (!selectedUserId) return;
+
+      try {
+        const token = localStorage.getItem("token");
+        const response = await axios.get(
+          `http://localhost:5000/api/users/${selectedUserId}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        setSelectedUserInfo(response.data);
+      } catch (error) {
+        console.error("Error fetching user info:", error);
+        setError("Failed to load user information");
+      }
+    };
+
+    fetchUserInfo();
+  }, [selectedUserId]);
+
+  // Fetch messages
   useEffect(() => {
     const fetchMessages = async () => {
       if (!selectedUserId || !currentUserId) return;
@@ -122,38 +165,6 @@ const Chat = ({ selectedUserId, currentUserId }) => {
     fetchMessages();
   }, [selectedUserId, currentUserId]);
 
-  // Handle incoming messages and typing indicators
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleNewMessage = (message) => {
-      setMessages((prev) => [...prev, message]);
-      scrollToBottom();
-    };
-
-    const handleTyping = ({ userId }) => {
-      if (userId === selectedUserId) {
-        setIsTyping(true);
-      }
-    };
-
-    const handleStoppedTyping = ({ userId }) => {
-      if (userId === selectedUserId) {
-        setIsTyping(false);
-      }
-    };
-
-    socket.on("newMessage", handleNewMessage);
-    socket.on("userTyping", handleTyping);
-    socket.on("userStoppedTyping", handleStoppedTyping);
-
-    return () => {
-      socket.off("newMessage", handleNewMessage);
-      socket.off("userTyping", handleTyping);
-      socket.off("userStoppedTyping", handleStoppedTyping);
-    };
-  }, [socket, selectedUserId]);
-
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
@@ -169,6 +180,12 @@ const Chat = ({ selectedUserId, currentUserId }) => {
       });
 
       setNewMessage("");
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        socket.emit("stopTyping", {
+          receiverId: selectedUserId,
+        });
+      }
     } catch (error) {
       console.error("Error sending message:", error);
       setError("Failed to send message");
@@ -179,7 +196,6 @@ const Chat = ({ selectedUserId, currentUserId }) => {
     if (!socket || !isConnected) return;
 
     socket.emit("typing", {
-      senderId: currentUserId,
       receiverId: selectedUserId,
     });
 
@@ -189,7 +205,6 @@ const Chat = ({ selectedUserId, currentUserId }) => {
 
     typingTimeoutRef.current = setTimeout(() => {
       socket.emit("stopTyping", {
-        senderId: currentUserId,
         receiverId: selectedUserId,
       });
     }, 2000);
@@ -204,6 +219,12 @@ const Chat = ({ selectedUserId, currentUserId }) => {
     });
   };
 
+  const getUserStatus = () => {
+    if (isTyping) return "typing...";
+    if (!isConnected) return "offline";
+    return userStatus[selectedUserId] || "online";
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-100px)] border rounded-lg bg-gray-50 shadow-lg">
       {/* Chat Header */}
@@ -214,9 +235,7 @@ const Chat = ({ selectedUserId, currentUserId }) => {
           </div>
           <div>
             <h2 className="text-lg font-semibold">{selectedUserInfo?.name}</h2>
-            <p className="text-sm text-gray-500">
-              {isTyping ? "typing..." : isConnected ? "online" : "offline"}
-            </p>
+            <p className="text-sm text-gray-500">{getUserStatus()}</p>
           </div>
         </div>
         {error && <div className="text-red-500 text-sm">{error}</div>}
